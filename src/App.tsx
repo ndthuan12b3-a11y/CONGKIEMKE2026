@@ -459,7 +459,12 @@ export default function App() {
                 if (item.id === itemId) {
                   let processedValue = value;
                   if (field === 'unitPrice' && typeof value === 'string') {
-                    processedValue = value.replace(/\D/g, '');
+                    let tempValue = value.toLowerCase();
+                    // Allow user to type 'k' to quickly add '000'
+                    if (tempValue.includes('k')) {
+                      tempValue = tempValue.replace(/k/g, '000');
+                    }
+                    processedValue = tempValue.replace(/\D/g, '');
                   }
                   const updatedItem = { ...item, [field]: processedValue };
                   const q = Number(updatedItem.quantity) || 0;
@@ -477,18 +482,6 @@ export default function App() {
       }
       return s;
     }));
-  };
-
-  const handleUnitPriceBlur = (storeId: string, pageId: string, itemId: string, value: string | number) => {
-    if (!value) return;
-    const num = parseInt(value.toString().replace(/\D/g, ''), 10);
-    if (isNaN(num) || num === 0) return;
-    
-    // Auto append 000 if the user types a small number (e.g., 50 becomes 50,000)
-    // In Vietnam, prices under 1000 VND are practically non-existent in normal retail
-    if (num < 1000) {
-      updateManualItem(storeId, pageId, itemId, 'unitPrice', (num * 1000).toString());
-    }
   };
 
   const handleKeyDown = (e: React.KeyboardEvent, index: number, field: 'quantity' | 'unitPrice') => {
@@ -894,7 +887,6 @@ export default function App() {
                               placeholder="0"
                               value={formatNumberInput(item.unitPrice)}
                               onChange={(e) => updateManualItem(activeStore.id, activePage.id, item.id, 'unitPrice', e.target.value)}
-                              onBlur={(e) => handleUnitPriceBlur(activeStore.id, activePage.id, item.id, e.target.value)}
                               onKeyDown={(e) => handleKeyDown(e, index, 'unitPrice')}
                               className="w-full rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm font-medium text-right focus:border-blue-500 focus:ring-2 focus:ring-blue-200 outline-none transition-all"
                             />
