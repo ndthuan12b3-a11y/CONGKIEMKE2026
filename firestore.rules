@@ -1,0 +1,40 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    // ===============================================================
+    // Assumed Data Model
+    // ===============================================================
+    // Collection: inventorySessions
+    // Fields:
+    //   - userId: string (required) - Guest ID
+    //   - stores: list (required) - Array of store objects
+    //   - grandTotal: number (required)
+    //   - updatedAt: timestamp (required)
+    
+    // ===============================================================
+    // Helper Functions
+    // ===============================================================
+    function isAuthenticated() {
+      return request.auth != null;
+    }
+    
+    function isOwner(userId) {
+      return isAuthenticated() && request.auth.uid == userId;
+    }
+
+    function isValidSession(data) {
+      return data.userId is string &&
+             data.stores is list &&
+             data.grandTotal is number &&
+             data.updatedAt is timestamp;
+    }
+
+    match /inventorySessions/{sessionId} {
+      allow read, write: if true;
+    }
+    
+    match /users/{userId} {
+      allow read, write: if isOwner(userId);
+    }
+  }
+}
