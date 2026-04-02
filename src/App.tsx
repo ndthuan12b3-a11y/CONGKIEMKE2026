@@ -98,6 +98,8 @@ export default function App() {
   const [isSaving, setIsSaving] = useState(false);
   const [lastSaved, setLastSaved] = useState<Date | null>(null);
   const [isInitialLoadComplete, setIsInitialLoadComplete] = useState(false);
+  const isDirtyRef = useRef(false);
+  const lastServerDataRef = useRef<string>('');
   const [showInstructions, setShowInstructions] = useState(false);
   const [showSyncModal, setShowSyncModal] = useState(false);
   const [syncInput, setSyncInput] = useState('');
@@ -233,11 +235,17 @@ export default function App() {
             pages: sortPages(s.pages)
           })));
           
+          const newStr = JSON.stringify(sortedStores);
+          lastServerDataRef.current = newStr;
+          
           // Only update if data is actually different to avoid unnecessary re-renders
           setStores(prev => {
             const currentStr = JSON.stringify(prev);
-            const newStr = JSON.stringify(sortedStores);
             if (currentStr !== newStr) {
+              if (isDirtyRef.current) {
+                // Ignore server update while user is typing to prevent data loss
+                return prev;
+              }
               return sortedStores;
             }
             return prev;
@@ -267,6 +275,16 @@ export default function App() {
     // to avoid overwriting cloud data with local default state.
     if (!isInitialLoadComplete) return;
     
+    const currentStr = JSON.stringify(stores);
+    if (currentStr === lastServerDataRef.current) {
+      // No local changes, do nothing
+      isDirtyRef.current = false;
+      return;
+    }
+
+    // We have local changes!
+    isDirtyRef.current = true;
+    
     const timer = setTimeout(async () => {
       setIsSaving(true);
       
@@ -284,6 +302,9 @@ export default function App() {
           grandTotal: allStoresGrandTotal,
           updatedAt: serverTimestamp()
         }, { merge: true });
+        
+        lastServerDataRef.current = currentStr;
+        isDirtyRef.current = false;
         setLastSaved(new Date());
       } catch (err) {
         console.error("Firestore Save Error:", err);
@@ -291,7 +312,7 @@ export default function App() {
       } finally {
         setIsSaving(false);
       }
-    }, 2000);
+    }, 1500);
 
     return () => clearTimeout(timer);
   }, [stores, currentId, isInitialLoadComplete, allStoresGrandTotal]);
