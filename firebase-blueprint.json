@@ -1,0 +1,53 @@
+{
+  "entities": {
+    "InventorySession": {
+      "title": "Inventory Session",
+      "description": "A session containing multiple pages of inventory data",
+      "type": "object",
+      "properties": {
+        "userId": { "type": "string", "description": "The UID of the user who owns this session" },
+        "stores": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "id": { "type": "string" },
+              "name": { "type": "string" },
+              "pages": {
+                "type": "array",
+                "items": {
+                  "type": "object",
+                  "properties": {
+                    "id": { "type": "string" },
+                    "name": { "type": "string" },
+                    "items": {
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "properties": {
+                          "id": { "type": "string" },
+                          "quantity": { "type": "number" },
+                          "unitPrice": { "type": "number" },
+                          "totalPrice": { "type": "number" }
+                        }
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          }
+        },
+        "grandTotal": { "type": "number" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["userId", "pages", "grandTotal", "updatedAt"]
+    }
+  },
+  "firestore": {
+    "/inventorySessions/{sessionId}": {
+      "schema": "InventorySession",
+      "description": "Stores user inventory sessions"
+    }
+  }
+}
