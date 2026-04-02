@@ -35,7 +35,11 @@ import {
   HelpCircle,
   Edit2,
   Save,
-  Info
+  Info,
+  RefreshCw,
+  Key,
+  Copy as CopyIcon,
+  ExternalLink
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 import { cn } from './lib/utils';
@@ -115,6 +119,9 @@ export default function App() {
   const [isSaving, setIsSaving] = useState(false);
   const [lastSaved, setLastSaved] = useState<Date | null>(null);
   const [showInstructions, setShowInstructions] = useState(false);
+  const [showSyncModal, setShowSyncModal] = useState(false);
+  const [syncInput, setSyncInput] = useState('');
+  const [copySuccess, setCopySuccess] = useState(false);
   
   // Confirmation Modal State
   const [confirmModal, setConfirmModal] = useState<{
@@ -147,6 +154,34 @@ export default function App() {
 
   const sortStores = (stores: Store[]) => {
     return [...stores].sort((a, b) => naturalSort(a.name, b.name));
+  };
+
+  const copySyncCode = () => {
+    navigator.clipboard.writeText(guestId);
+    setCopySuccess(true);
+    setTimeout(() => setCopySuccess(false), 2000);
+  };
+
+  const handleSync = () => {
+    if (syncInput.trim().length < 5) {
+      setError("Mã đồng bộ không hợp lệ.");
+      return;
+    }
+    
+    setConfirmModal({
+      show: true,
+      title: 'Đổi mã đồng bộ?',
+      message: 'Dữ liệu hiện tại trên máy này sẽ bị thay thế bằng dữ liệu từ mã mới. Bạn có chắc chắn muốn tiếp tục?',
+      type: 'warning',
+      onConfirm: () => {
+        setGuestId(syncInput.trim());
+        localStorage.setItem('invoice_digitizer_guest_id', syncInput.trim());
+        setShowSyncModal(false);
+        setSyncInput('');
+        setConfirmModal(prev => ({ ...prev, show: false }));
+        window.location.reload(); // Reload to re-initialize Firestore listener with new ID
+      }
+    });
   };
 
   // Set initial active store and page
@@ -642,6 +677,15 @@ export default function App() {
             <div className="h-8 w-px bg-slate-200 mx-2 hidden sm:block"></div>
 
             <div className="flex items-center gap-3">
+              <button 
+                onClick={() => setShowSyncModal(true)}
+                className="flex h-10 items-center gap-2 rounded-xl bg-amber-50 px-3 text-sm font-bold text-amber-600 transition-all hover:bg-amber-100"
+                title="Đồng bộ đa thiết bị"
+              >
+                <RefreshCw className={cn("h-4 w-4", isSaving && "animate-spin")} />
+                <span className="hidden md:inline">Đồng bộ</span>
+              </button>
+
               <button 
                 onClick={() => setShowInstructions(!showInstructions)}
                 className="flex h-10 items-center gap-2 rounded-xl bg-blue-50 px-3 text-sm font-bold text-blue-600 transition-all hover:bg-blue-100"
@@ -1147,6 +1191,80 @@ export default function App() {
           </p>
         </div>
       </footer>
+
+      {/* Sync Modal */}
+      <AnimatePresence>
+        {showSyncModal && (
+          <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
+            <motion.div 
+              initial={{ opacity: 0 }}
+              animate={{ opacity: 1 }}
+              exit={{ opacity: 0 }}
+              onClick={() => setShowSyncModal(false)}
+              className="absolute inset-0 bg-slate-900/60 backdrop-blur-sm"
+            />
+            <motion.div 
+              initial={{ opacity: 0, scale: 0.9, y: 20 }}
+              animate={{ opacity: 1, scale: 1, y: 0 }}
+              exit={{ opacity: 0, scale: 0.9, y: 20 }}
+              className="relative w-full max-w-md overflow-hidden rounded-3xl bg-white p-8 shadow-2xl"
+            >
+              <div className="mb-6 flex h-16 w-16 items-center justify-center rounded-full bg-amber-50 text-amber-500">
+                <RefreshCw className="h-8 w-8" />
+              </div>
+              <h3 className="mb-2 text-2xl font-bold text-slate-900">Đồng bộ đa thiết bị</h3>
+              <p className="mb-6 text-sm text-slate-500 leading-relaxed">
+                Sử dụng mã dưới đây để truy cập dữ liệu của bạn từ bất kỳ máy tính hoặc điện thoại nào khác.
+              </p>
+
+              <div className="mb-8 space-y-4">
+                <div className="rounded-2xl bg-slate-50 p-4">
+                  <p className="mb-2 text-[10px] font-bold uppercase tracking-widest text-slate-400">Mã của bạn hiện tại:</p>
+                  <div className="flex items-center justify-between gap-2">
+                    <code className="flex-1 overflow-hidden text-ellipsis font-mono text-sm font-bold text-blue-600">
+                      {guestId}
+                    </code>
+                    <button 
+                      onClick={copySyncCode}
+                      className="flex h-8 w-8 items-center justify-center rounded-lg bg-white text-slate-400 shadow-sm transition-all hover:text-blue-600"
+                    >
+                      {copySuccess ? <CheckCircle2 className="h-4 w-4 text-green-500" /> : <CopyIcon className="h-4 w-4" />}
+                    </button>
+                  </div>
+                </div>
+
+                <div className="h-px bg-slate-100"></div>
+
+                <div>
+                  <p className="mb-2 text-[10px] font-bold uppercase tracking-widest text-slate-400">Nhập mã từ máy khác:</p>
+                  <div className="flex gap-2">
+                    <input 
+                      type="text"
+                      placeholder="Dán mã vào đây..."
+                      value={syncInput}
+                      onChange={(e) => setSyncInput(e.target.value)}
+                      className="flex-1 rounded-xl border border-slate-200 bg-white px-4 py-2 text-sm outline-none focus:border-blue-500 focus:ring-2 focus:ring-blue-100"
+                    />
+                    <button 
+                      onClick={handleSync}
+                      className="rounded-xl bg-blue-600 px-4 py-2 text-sm font-bold text-white shadow-lg shadow-blue-100 transition-all hover:bg-blue-700"
+                    >
+                      Kết nối
+                    </button>
+                  </div>
+                </div>
+              </div>
+
+              <button 
+                onClick={() => setShowSyncModal(false)}
+                className="w-full rounded-2xl bg-slate-100 py-4 font-bold text-slate-600 transition-all hover:bg-slate-200"
+              >
+                Đóng
+              </button>
+            </motion.div>
+          </div>
+        )}
+      </AnimatePresence>
 
       {/* Confirmation Modal */}
       <AnimatePresence>
