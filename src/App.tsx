@@ -4,7 +4,8 @@
  */
 
 import React, { useState, useRef, useEffect, useCallback, useMemo } from 'react';
-import * as XLSX from 'xlsx';
+import ExcelJS from 'exceljs';
+import { saveAs } from 'file-saver';
 import { 
   FileText, 
   CheckCircle2, 
@@ -32,7 +33,9 @@ import {
   LogIn,
   LogOut,
   Search,
-  ArrowRight
+  ArrowRight,
+  Lock,
+  Unlock
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 import { cn } from './lib/utils';
@@ -58,6 +61,7 @@ interface Store {
   id: string;
   name: string;
   pages: Page[];
+  isLocked?: boolean;
 }
 
 // --- Components ---
@@ -495,6 +499,10 @@ export default function App() {
     setEditingStoreId(null);
   };
 
+  const toggleStoreLock = (id: string) => {
+    setStores(prev => prev.map(s => s.id === id ? { ...s, isLocked: !s.isLocked } : s));
+  };
+
   const addPage = (storeId: string) => {
     setStores(prev => prev.map(s => {
       if (s.id === storeId) {
@@ -666,155 +674,237 @@ export default function App() {
     return numStr.replace(/\B(?=(\d{3})+(?!\d))/g, ".");
   };
 
-  const exportStoreToExcel = (store: Store) => {
-    const wb = XLSX.utils.book_new();
-    const wsData: any[][] = [];
+  const exportStoreToExcel = async (store: Store) => {
+    const wb = new ExcelJS.Workbook();
+    wb.creator = 'Invoice Digitizer Pro';
+
+    // 1. Bảng Tổng Hợp (Chỉ có tổng số tiền trên tờ)
+    const summaryWs = wb.addWorksheet('Tổng hợp');
+    summaryWs.columns = [
+      { header: 'STT', key: 'stt', width: 10 },
+      { header: 'Tên Trang', key: 'name', width: 30 },
+      { header: 'Tổng Tiền', key: 'total', width: 20 }
+    ];
+    
+    summaryWs.getRow(1).font = { bold: true, name: 'Times New Roman', size: 12 };
+    summaryWs.getRow(1).alignment = { horizontal: 'center', vertical: 'middle' };
+
+    let storeTotal = 0;
+    store.pages.forEach((page, idx) => {
+      const pageTotal = getPageTotal(page);
+      storeTotal += pageTotal;
+      summaryWs.addRow({ stt: idx + 1, name: page.name, total: pageTotal });
+    });
+
+    const totalRow = summaryWs.addRow({ stt: '', name: 'TỔNG CỘNG', total: storeTotal });
+    totalRow.font = { bold: true, name: 'Times New Roman', size: 12 };
+
+    summaryWs.eachRow((row, rowNumber) => {
+      row.eachCell((cell, colNumber) => {
+        cell.border = {
+          top: { style: 'thin' },
+          left: { style: 'thin' },
+          bottom: { style: 'thin' },
+          right: { style: 'thin' }
+        };
+        cell.font = cell.font || { name: 'Times New Roman', size: 12 };
+        if (rowNumber > 1 && colNumber === 3) {
+          cell.numFmt = '#,##0';
+        }
+      });
+    });
+
+    // 2. Bảng Chi Tiết (Kê ngang)
+    let sheetName = store.name.substring(0, 31).replace(/[\\/?*[\]]/g, '_');
+    if (sheetName.toLowerCase() === 'tổng hợp') sheetName = 'Chi tiết';
+    const detailWs = wb.addWorksheet(sheetName);
     
     let maxItems = 0;
     store.pages.forEach(page => {
       maxItems = Math.max(maxItems, page.items.length);
     });
 
-    // Header Row 1: Page Names
-    const headerRow1: any[] = [];
-    const headerRow2: any[] = [];
-    
-    store.pages.forEach((page, pIdx) => {
-      const startCol = pIdx * 5;
-      headerRow1[startCol] = page.name.toUpperCase();
-      headerRow2[startCol] = "STT";
-      headerRow2[startCol + 1] = "Số lượng";
-      headerRow2[startCol + 2] = "Đơn giá";
-      headerRow2[startCol + 3] = "Thành tiền";
-    });
+    const row1 = detailWs.getRow(1);
+    const row2 = detailWs.getRow(2);
 
-    wsData.push(headerRow1);
-    wsData.push(headerRow2);
+    store.pages.forEach((page, pIdx) => {
+      const startCol = pIdx * 5 + 1;
+      
+      row1.getCell(startCol).value = page.name.toUpperCase();
+      row1.getCell(startCol).font = { bold: true, name: 'Times New Roman', size: 12, color: { argb: 'FF0000FF' } };
+      
+      row2.getCell(startCol).value = 'STT';
+      row2.getCell(startCol + 1).value = 'Số lượng';
+      row2.getCell(startCol + 2).value = 'Đơn giá';
+      row2.getCell(startCol + 3).value = 'Thành tiền';
+      
+      for(let i=0; i<4; i++) {
+         row2.getCell(startCol + i).font = { bold: true, name: 'Times New Roman', size: 12 };
+         row2.getCell(startCol + i).alignment = { horizontal: 'center', vertical: 'middle' };
+         detailWs.getColumn(startCol + i).width = [10, 15, 20, 20][i];
+      }
+      detailWs.getColumn(startCol + 4).width = 3; // Gap
+    });
 
     for (let i = 0; i < maxItems; i++) {
-      const row: any[] = [];
+      const row = detailWs.getRow(i + 3);
       store.pages.forEach((page, pIdx) => {
-        const startCol = pIdx * 5;
+        const startCol = pIdx * 5 + 1;
         const item = page.items[i];
         if (item) {
-          row[startCol] = i + 1;
-          row[startCol + 1] = item.quantity === '' ? null : Number(item.quantity);
-          row[startCol + 2] = item.unitPrice === '' ? null : Number(item.unitPrice);
-          row[startCol + 3] = item.totalPrice || null;
+          row.getCell(startCol).value = i + 1;
+          row.getCell(startCol + 1).value = item.quantity === '' ? '' : Number(item.quantity);
+          row.getCell(startCol + 2).value = item.unitPrice === '' ? '' : Number(item.unitPrice);
+          row.getCell(startCol + 3).value = item.totalPrice || 0;
         }
       });
-      wsData.push(row);
     }
 
-    // Totals Row
-    const totalsRow: any[] = [];
+    const pTotalRow = detailWs.getRow(maxItems + 3);
     store.pages.forEach((page, pIdx) => {
-      const startCol = pIdx * 5;
-      totalsRow[startCol] = "TỔNG CỘNG";
-      totalsRow[startCol + 3] = getPageTotal(page);
+      const startCol = pIdx * 5 + 1;
+      pTotalRow.getCell(startCol + 2).value = 'TỔNG CỘNG';
+      pTotalRow.getCell(startCol + 3).value = getPageTotal(page);
+      pTotalRow.getCell(startCol + 2).font = { bold: true, name: 'Times New Roman', size: 12 };
+      pTotalRow.getCell(startCol + 3).font = { bold: true, name: 'Times New Roman', size: 12 };
     });
-    wsData.push(totalsRow);
 
-    const ws = XLSX.utils.aoa_to_sheet(wsData);
-    
-    // Set column widths
-    const wscols = [];
-    for (let p = 0; p < store.pages.length; p++) {
-      wscols.push({ wch: 5 });  // STT
-      wscols.push({ wch: 10 }); // Số lượng
-      wscols.push({ wch: 15 }); // Đơn giá
-      wscols.push({ wch: 20 }); // Thành tiền
-      wscols.push({ wch: 2 });  // Gap
-    }
-    ws['!cols'] = wscols;
+    detailWs.eachRow((row, rowNumber) => {
+      row.eachCell((cell, colNumber) => {
+        if (cell.value !== null && cell.value !== '') {
+          cell.border = {
+            top: { style: 'thin' },
+            left: { style: 'thin' },
+            bottom: { style: 'thin' },
+            right: { style: 'thin' }
+          };
+          cell.font = cell.font || { name: 'Times New Roman', size: 12 };
+          
+          const colInGroup = (colNumber - 1) % 5;
+          if (rowNumber > 2 && (colInGroup === 2 || colInGroup === 3) && typeof cell.value === 'number') {
+            cell.numFmt = '#,##0';
+          }
+        }
+      });
+    });
 
-    XLSX.utils.book_append_sheet(wb, ws, store.name.substring(0, 31));
-    XLSX.writeFile(wb, `Bao_cao_${store.name.replace(/\s+/g, '_')}.xlsx`);
+    const buffer = await wb.xlsx.writeBuffer();
+    saveAs(new Blob([buffer]), `Bao_cao_${store.name.replace(/\s+/g, '_')}.xlsx`);
   };
 
-  const exportAllToExcel = () => {
-    const wb = XLSX.utils.book_new();
-    
-    // Summary Sheet
-    const summaryData: any[][] = [
-      ["BÁO CÁO TỔNG HỢP TẤT CẢ CỬA HÀNG"],
-      [],
-      ["Tên Cửa Hàng", "Tổng Cộng"]
+  const exportAllToExcel = async () => {
+    const wb = new ExcelJS.Workbook();
+    wb.creator = 'Invoice Digitizer Pro';
+
+    // 1. Tổng hợp toàn bộ (Chỉ có tổng số tiền trên tờ)
+    const summaryWs = wb.addWorksheet('Tổng hợp toàn bộ');
+    summaryWs.columns = [
+      { header: 'STT', key: 'stt', width: 10 },
+      { header: 'Tên Cửa Hàng', key: 'store', width: 25 },
+      { header: 'Tên Trang', key: 'page', width: 25 },
+      { header: 'Tổng Tiền', key: 'total', width: 20 }
     ];
     
-    stores.forEach(store => {
-      summaryData.push([store.name, getStoreTotal(store)]);
-    });
-    
-    summaryData.push([]);
-    summaryData.push(["TỔNG CỘNG TOÀN BỘ", allStoresGrandTotal]);
-    
-    const summaryWs = XLSX.utils.aoa_to_sheet(summaryData);
-    XLSX.utils.book_append_sheet(wb, summaryWs, "Tổng hợp");
+    summaryWs.getRow(1).font = { bold: true, name: 'Times New Roman', size: 12 };
+    summaryWs.getRow(1).alignment = { horizontal: 'center', vertical: 'middle' };
 
-    // Individual Store Sheets
-    stores.forEach(store => {
-      const wsData: any[][] = [];
-      const headerRow1: any[] = [];
-      const headerRow2: any[] = [];
+    let stt = 1;
+    stores.forEach((store) => {
+      store.pages.forEach((page) => {
+        summaryWs.addRow({ stt: stt++, store: store.name, page: page.name, total: getPageTotal(page) });
+      });
+      const storeTotalRow = summaryWs.addRow({ stt: '', store: `CỘNG ${store.name}`, page: '', total: getStoreTotal(store) });
+      storeTotalRow.font = { bold: true, name: 'Times New Roman', size: 12, italic: true };
+    });
+
+    const totalRow = summaryWs.addRow({ stt: '', store: 'TỔNG CỘNG TOÀN BỘ', page: '', total: allStoresGrandTotal });
+    totalRow.font = { bold: true, name: 'Times New Roman', size: 12, color: { argb: 'FFFF0000' } };
+
+    summaryWs.eachRow((row, rowNumber) => {
+      row.eachCell((cell, colNumber) => {
+        if (cell.value !== null && cell.value !== '') {
+          cell.border = { top: { style: 'thin' }, left: { style: 'thin' }, bottom: { style: 'thin' }, right: { style: 'thin' } };
+        }
+        cell.font = cell.font || { name: 'Times New Roman', size: 12 };
+        if (rowNumber > 1 && colNumber === 4 && typeof cell.value === 'number') {
+          cell.numFmt = '#,##0';
+        }
+      });
+    });
+
+    // 2. Từng cửa hàng (Kê ngang)
+    stores.forEach((store) => {
+      let sheetName = store.name.substring(0, 31).replace(/[\\/?*[\]]/g, '_');
+      if (sheetName.toLowerCase() === 'tổng hợp toàn bộ') sheetName = sheetName + ' 1';
+      const storeWs = wb.addWorksheet(sheetName);
       
       let maxItems = 0;
       store.pages.forEach(page => {
         maxItems = Math.max(maxItems, page.items.length);
       });
 
-      store.pages.forEach((page, pIdx) => {
-        const startCol = pIdx * 5;
-        headerRow1[startCol] = page.name.toUpperCase();
-        headerRow2[startCol] = "STT";
-        headerRow2[startCol + 1] = "Số lượng";
-        headerRow2[startCol + 2] = "Đơn giá";
-        headerRow2[startCol + 3] = "Thành tiền";
-      });
+      const row1 = storeWs.getRow(1);
+      const row2 = storeWs.getRow(2);
 
-      wsData.push(headerRow1);
-      wsData.push(headerRow2);
+      store.pages.forEach((page, pIdx) => {
+        const startCol = pIdx * 5 + 1;
+        
+        row1.getCell(startCol).value = page.name.toUpperCase();
+        row1.getCell(startCol).font = { bold: true, name: 'Times New Roman', size: 12, color: { argb: 'FF0000FF' } };
+        
+        row2.getCell(startCol).value = 'STT';
+        row2.getCell(startCol + 1).value = 'Số lượng';
+        row2.getCell(startCol + 2).value = 'Đơn giá';
+        row2.getCell(startCol + 3).value = 'Thành tiền';
+        
+        for(let i=0; i<4; i++) {
+           row2.getCell(startCol + i).font = { bold: true, name: 'Times New Roman', size: 12 };
+           row2.getCell(startCol + i).alignment = { horizontal: 'center', vertical: 'middle' };
+           storeWs.getColumn(startCol + i).width = [10, 15, 20, 20][i];
+        }
+        storeWs.getColumn(startCol + 4).width = 3; // Gap
+      });
 
       for (let i = 0; i < maxItems; i++) {
-        const row: any[] = [];
+        const row = storeWs.getRow(i + 3);
         store.pages.forEach((page, pIdx) => {
-          const startCol = pIdx * 5;
+          const startCol = pIdx * 5 + 1;
           const item = page.items[i];
           if (item) {
-            row[startCol] = i + 1;
-            row[startCol + 1] = item.quantity === '' ? null : Number(item.quantity);
-            row[startCol + 2] = item.unitPrice === '' ? null : Number(item.unitPrice);
-            row[startCol + 3] = item.totalPrice || null;
+            row.getCell(startCol).value = i + 1;
+            row.getCell(startCol + 1).value = item.quantity === '' ? '' : Number(item.quantity);
+            row.getCell(startCol + 2).value = item.unitPrice === '' ? '' : Number(item.unitPrice);
+            row.getCell(startCol + 3).value = item.totalPrice || 0;
           }
         });
-        wsData.push(row);
       }
 
-      const totalsRow: any[] = [];
+      const pTotalRow = storeWs.getRow(maxItems + 3);
       store.pages.forEach((page, pIdx) => {
-        const startCol = pIdx * 5;
-        totalsRow[startCol] = "TỔNG CỘNG";
-        totalsRow[startCol + 3] = getPageTotal(page);
+        const startCol = pIdx * 5 + 1;
+        pTotalRow.getCell(startCol + 2).value = 'TỔNG CỘNG';
+        pTotalRow.getCell(startCol + 3).value = getPageTotal(page);
+        pTotalRow.getCell(startCol + 2).font = { bold: true, name: 'Times New Roman', size: 12 };
+        pTotalRow.getCell(startCol + 3).font = { bold: true, name: 'Times New Roman', size: 12 };
       });
-      wsData.push(totalsRow);
 
-      const ws = XLSX.utils.aoa_to_sheet(wsData);
-      
-      // Set column widths
-      const wscols = [];
-      for (let p = 0; p < store.pages.length; p++) {
-        wscols.push({ wch: 5 });  // STT
-        wscols.push({ wch: 10 }); // Số lượng
-        wscols.push({ wch: 15 }); // Đơn giá
-        wscols.push({ wch: 20 }); // Thành tiền
-        wscols.push({ wch: 2 });  // Gap
-      }
-      ws['!cols'] = wscols;
-
-      XLSX.utils.book_append_sheet(wb, ws, store.name.substring(0, 31));
+      storeWs.eachRow((row, rowNumber) => {
+        row.eachCell((cell, colNumber) => {
+          if (cell.value !== null && cell.value !== '') {
+            cell.border = { top: { style: 'thin' }, left: { style: 'thin' }, bottom: { style: 'thin' }, right: { style: 'thin' } };
+            cell.font = cell.font || { name: 'Times New Roman', size: 12 };
+            
+            const colInGroup = (colNumber - 1) % 5;
+            if (rowNumber > 2 && (colInGroup === 2 || colInGroup === 3) && typeof cell.value === 'number') {
+              cell.numFmt = '#,##0';
+            }
+          }
+        });
+      });
     });
 
-    XLSX.writeFile(wb, "Bao_cao_tong_hop_toan_bo.xlsx");
+    const buffer = await wb.xlsx.writeBuffer();
+    saveAs(new Blob([buffer]), `Bao_cao_tong_hop_toan_bo.xlsx`);
   };
 
   const formatCurrency = (amount: number) => {
@@ -894,7 +984,13 @@ export default function App() {
                       </div>
                     ) : (
                       <div className="px-3 py-8 text-center text-sm text-slate-400">
-                        Không tìm thấy kết quả nào cho "{searchTerm}"
+                        {searchTerm !== debouncedSearchTerm ? (
+                          <span className="flex items-center justify-center gap-2">
+                            <Loader2 className="h-4 w-4 animate-spin" /> Đang tìm kiếm...
+                          </span>
+                        ) : (
+                          `Không tìm thấy kết quả nào cho "${searchTerm}"`
+                        )}
                       </div>
                     )}
                   </motion.div>
@@ -1027,7 +1123,7 @@ export default function App() {
                             setActiveStoreId(s.id);
                             setActivePageId(s.pages[0].id);
                           }}
-                          onDoubleClick={() => { setEditingStoreId(s.id); setEditValue(s.name); }}
+                          onDoubleClick={() => { if (!s.isLocked) { setEditingStoreId(s.id); setEditValue(s.name); } }}
                           className={cn(
                             "flex items-center gap-2 rounded-xl px-4 py-2 text-sm font-bold transition-all",
                             activeStoreId === s.id ? "bg-slate-900 text-white shadow-lg" : "bg-white text-slate-500 hover:bg-slate-100"
@@ -1035,22 +1131,36 @@ export default function App() {
                         >
                           <LayoutDashboard className="h-4 w-4" />
                           {s.name}
+                          {s.isLocked && <Lock className="h-3 w-3 text-amber-500" />}
                         </button>
                       )}
-                      {stores.length > 1 && editingStoreId !== s.id && (
+                      {editingStoreId !== s.id && (
                         <div className="absolute -right-1 -top-1 hidden gap-1 group-hover:flex">
                           <button 
-                            onClick={(e) => { e.stopPropagation(); setEditingStoreId(s.id); setEditValue(s.name); }}
-                            className="flex h-5 w-5 items-center justify-center rounded-full bg-blue-500 text-white shadow-sm"
+                            onClick={(e) => { e.stopPropagation(); toggleStoreLock(s.id); }}
+                            className={cn("flex h-5 w-5 items-center justify-center rounded-full text-white shadow-sm transition-colors", s.isLocked ? "bg-amber-500 hover:bg-amber-600" : "bg-slate-300 hover:bg-amber-500")}
+                            title={s.isLocked ? "Mở khóa cửa hàng" : "Khóa cửa hàng (chống xóa)"}
                           >
-                            <Edit2 className="h-3 w-3" />
+                            {s.isLocked ? <Lock className="h-3 w-3" /> : <Unlock className="h-3 w-3" />}
                           </button>
-                          <button 
-                            onClick={(e) => { e.stopPropagation(); removeStore(s.id); }}
-                            className="flex h-5 w-5 items-center justify-center rounded-full bg-red-500 text-white shadow-sm"
-                          >
-                            <X className="h-3 w-3" />
-                          </button>
+                          {!s.isLocked && (
+                            <button 
+                              onClick={(e) => { e.stopPropagation(); setEditingStoreId(s.id); setEditValue(s.name); }}
+                              className="flex h-5 w-5 items-center justify-center rounded-full bg-blue-500 text-white shadow-sm hover:bg-blue-600"
+                              title="Đổi tên"
+                            >
+                              <Edit2 className="h-3 w-3" />
+                            </button>
+                          )}
+                          {!s.isLocked && stores.length > 1 && (
+                            <button 
+                              onClick={(e) => { e.stopPropagation(); removeStore(s.id); }}
+                              className="flex h-5 w-5 items-center justify-center rounded-full bg-red-500 text-white shadow-sm hover:bg-red-600"
+                              title="Xóa cửa hàng"
+                            >
+                              <X className="h-3 w-3" />
+                            </button>
+                          )}
                         </div>
                       )}
                     </div>
