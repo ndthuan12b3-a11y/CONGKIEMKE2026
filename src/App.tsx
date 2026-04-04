@@ -3,7 +3,8 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import React, { useState, useRef, useEffect, useCallback } from 'react';
+import React, { useState, useRef, useEffect, useCallback, useMemo } from 'react';
+import * as XLSX from 'xlsx';
 import { 
   FileText, 
   CheckCircle2, 
@@ -29,7 +30,9 @@ import {
   Calculator,
   User,
   LogIn,
-  LogOut
+  LogOut,
+  Search,
+  ArrowRight
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 import { cn } from './lib/utils';
@@ -58,6 +61,74 @@ interface Store {
 }
 
 // --- Components ---
+
+const InventoryRow = React.memo(({ 
+  item, 
+  index, 
+  onUpdate, 
+  onRemove, 
+  onKeyDown,
+  formatCurrency,
+  formatNumberInput
+}: { 
+  item: InventoryItem; 
+  index: number; 
+  onUpdate: (field: keyof InventoryItem, value: string | number) => void;
+  onRemove: () => void;
+  onKeyDown: (e: React.KeyboardEvent, index: number, field: 'quantity' | 'unitPrice') => void;
+  formatCurrency: (amount: number) => string;
+  formatNumberInput: (val: string | number) => string;
+}) => {
+  return (
+    <motion.div 
+      initial={{ opacity: 0, x: -20 }}
+      animate={{ opacity: 1, x: 0 }}
+      exit={{ opacity: 0, scale: 0.95 }}
+      transition={{ duration: 0.2 }}
+      className="group relative grid grid-cols-1 gap-4 rounded-xl border border-slate-100 bg-slate-50/50 p-4 transition-all hover:border-blue-200 hover:bg-white hover:shadow-md sm:grid-cols-12 sm:items-center"
+    >
+      <div className="col-span-1 font-bold text-slate-300">#{index + 1}</div>
+      <div className="col-span-3">
+        <label className="mb-1 block text-[10px] font-bold uppercase text-slate-400 sm:hidden">Số lượng</label>
+        <input 
+          type="number" 
+          placeholder="0"
+          value={item.quantity}
+          onChange={(e) => onUpdate('quantity', e.target.value)}
+          onKeyDown={(e) => onKeyDown(e, index, 'quantity')}
+          className="w-full rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm font-medium text-center focus:border-blue-500 focus:ring-2 focus:ring-blue-200 outline-none transition-all"
+        />
+      </div>
+      <div className="col-span-3">
+        <label className="mb-1 block text-[10px] font-bold uppercase text-slate-400 sm:hidden">Đơn giá</label>
+        <input 
+          type="text" 
+          placeholder="0"
+          value={formatNumberInput(item.unitPrice)}
+          onChange={(e) => onUpdate('unitPrice', e.target.value)}
+          onKeyDown={(e) => onKeyDown(e, index, 'unitPrice')}
+          className="w-full rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm font-medium text-right focus:border-blue-500 focus:ring-2 focus:ring-blue-200 outline-none transition-all"
+        />
+      </div>
+      <div className="col-span-4 text-right">
+        <label className="mb-1 block text-[10px] font-bold uppercase text-slate-400 sm:hidden">Thành tiền</label>
+        <div className="px-3 py-2 text-sm font-bold text-slate-900">
+          {formatCurrency(item.totalPrice)}
+        </div>
+      </div>
+      <div className="col-span-1 flex justify-end">
+        <button 
+          onClick={onRemove}
+          className="flex h-8 w-8 items-center justify-center rounded-lg text-slate-300 hover:bg-red-50 hover:text-red-500 transition-all"
+        >
+          <X className="h-4 w-4" />
+        </button>
+      </div>
+    </motion.div>
+  );
+});
+
+InventoryRow.displayName = 'InventoryRow';
 
 export default function App() {
   
@@ -98,12 +169,68 @@ export default function App() {
   const [isSaving, setIsSaving] = useState(false);
   const [lastSaved, setLastSaved] = useState<Date | null>(null);
   const [isInitialLoadComplete, setIsInitialLoadComplete] = useState(false);
+  const isInitialLoadCompleteRef = useRef(false);
   const isDirtyRef = useRef(false);
   const lastServerDataRef = useRef<string>('');
+  const storesRef = useRef(stores);
+  storesRef.current = stores;
   const [showInstructions, setShowInstructions] = useState(false);
   const [showSyncModal, setShowSyncModal] = useState(false);
   const [syncInput, setSyncInput] = useState('');
   const [copySuccess, setCopySuccess] = useState(false);
+  const [searchTerm, setSearchTerm] = useState('');
+  const [debouncedSearchTerm, setDebouncedSearchTerm] = useState('');
+  const [showSearch, setShowSearch] = useState(false);
+  
+  useEffect(() => {
+    const timer = setTimeout(() => {
+      setDebouncedSearchTerm(searchTerm);
+    }, 300);
+    return () => clearTimeout(timer);
+  }, [searchTerm]);
+
+  const searchResults = useMemo(() => {
+    if (!debouncedSearchTerm.trim()) return [];
+    const term = debouncedSearchTerm.toLowerCase();
+    const results: { storeId: string; storeName: string; pageId: string; pageName: string; item: InventoryItem; index: number }[] = [];
+
+    stores.forEach(store => {
+      const storeName = store.name.toLowerCase();
+      store.pages.forEach(page => {
+        const pageName = page.name.toLowerCase();
+        page.items.forEach((item, index) => {
+          const quantity = item.quantity.toString().toLowerCase();
+          const unitPrice = item.unitPrice.toString().toLowerCase();
+          const totalPrice = item.totalPrice.toString().toLowerCase();
+          
+          if (
+            storeName.includes(term) ||
+            pageName.includes(term) ||
+            quantity.includes(term) || 
+            unitPrice.includes(term) || 
+            totalPrice.includes(term)
+          ) {
+            results.push({ 
+              storeId: store.id, 
+              storeName: store.name, 
+              pageId: page.id, 
+              pageName: page.name, 
+              item, 
+              index 
+            });
+          }
+        });
+      });
+    });
+    return results;
+  }, [stores, debouncedSearchTerm]);
+
+  const navigateToResult = (storeId: string, pageId: string) => {
+    setActiveStoreId(storeId);
+    setActivePageId(pageId);
+    setSearchTerm('');
+    setShowSearch(false);
+  };
   
   const getPageTotal = (page: Page) => page.items.reduce((sum, item) => sum + item.totalPrice, 0);
   const getStoreTotal = (store: Store) => store.pages.reduce((sum, page) => sum + getPageTotal(page), 0);
@@ -224,7 +351,7 @@ export default function App() {
     const unsubscribe = onSnapshot(docRef, (docSnap) => {
       // If we have pending local writes, don't overwrite local state with server state
       // unless it's the very first load.
-      if (docSnap.metadata.hasPendingWrites && isInitialLoadComplete) return;
+      if (docSnap.metadata.hasPendingWrites && isInitialLoadCompleteRef.current) return;
 
       if (docSnap.exists()) {
         const data = docSnap.data();
@@ -259,15 +386,22 @@ export default function App() {
           }]);
         }
       }
-      setIsInitialLoadComplete(true);
+      
+      if (!isInitialLoadCompleteRef.current) {
+        isInitialLoadCompleteRef.current = true;
+        setIsInitialLoadComplete(true);
+      }
     }, (err) => {
       console.error("Firestore Load Error:", err);
       setError("Không thể tải dữ liệu từ đám mây.");
-      setIsInitialLoadComplete(true);
+      if (!isInitialLoadCompleteRef.current) {
+        isInitialLoadCompleteRef.current = true;
+        setIsInitialLoadComplete(true);
+      }
     });
 
     return () => unsubscribe();
-  }, [currentId, isInitialLoadComplete]);
+  }, [currentId]);
 
   // Save data (Debounced)
   useEffect(() => {
@@ -304,7 +438,9 @@ export default function App() {
         }, { merge: true });
         
         lastServerDataRef.current = currentStr;
-        isDirtyRef.current = false;
+        if (storesRef.current === stores) {
+          isDirtyRef.current = false;
+        }
         setLastSaved(new Date());
       } catch (err) {
         console.error("Firestore Save Error:", err);
@@ -312,7 +448,7 @@ export default function App() {
       } finally {
         setIsSaving(false);
       }
-    }, 1500);
+    }, 500);
 
     return () => clearTimeout(timer);
   }, [stores, currentId, isInitialLoadComplete, allStoresGrandTotal]);
@@ -413,7 +549,7 @@ export default function App() {
     setEditingPageId(null);
   };
 
-  const addManualRow = (storeId: string, pageId: string) => {
+  const addManualRow = useCallback((storeId: string, pageId: string) => {
     setStores(prev => prev.map(s => {
       if (s.id === storeId) {
         return {
@@ -428,9 +564,9 @@ export default function App() {
       }
       return s;
     }));
-  };
+  }, []);
 
-  const removeManualRow = (storeId: string, pageId: string, itemId: string) => {
+  const removeManualRow = useCallback((storeId: string, pageId: string, itemId: string) => {
     setStores(prev => prev.map(s => {
       if (s.id === storeId) {
         return {
@@ -446,9 +582,9 @@ export default function App() {
       }
       return s;
     }));
-  };
+  }, []);
 
-  const updateManualItem = (storeId: string, pageId: string, itemId: string, field: keyof InventoryItem, value: string | number) => {
+  const updateManualItem = useCallback((storeId: string, pageId: string, itemId: string, field: keyof InventoryItem, value: string | number) => {
     setStores(prev => prev.map(s => {
       if (s.id === storeId) {
         return {
@@ -482,9 +618,9 @@ export default function App() {
       }
       return s;
     }));
-  };
+  }, []);
 
-  const handleKeyDown = (e: React.KeyboardEvent, index: number, field: 'quantity' | 'unitPrice') => {
+  const handleKeyDown = useCallback((e: React.KeyboardEvent, index: number, field: 'quantity' | 'unitPrice') => {
     if (e.key === 'Enter') {
       e.preventDefault();
       const items = activePage.items;
@@ -496,7 +632,9 @@ export default function App() {
         if (nextRow) {
           const inputs = nextRow.querySelectorAll('input');
           const targetInput = field === 'quantity' ? inputs[0] : inputs[1];
-          (targetInput as HTMLInputElement)?.focus();
+          const input = targetInput as HTMLInputElement;
+          input?.focus();
+          input?.select();
         }
       } else {
         // Last row, add new row and focus it
@@ -511,13 +649,15 @@ export default function App() {
             if (lastRow) {
               const inputs = lastRow.querySelectorAll('input');
               const targetInput = field === 'quantity' ? inputs[0] : inputs[1];
-              (targetInput as HTMLInputElement)?.focus();
+              const input = targetInput as HTMLInputElement;
+              input?.focus();
+              input?.select();
             }
           }
         }, 50);
       }
     }
-  };
+  }, [activePage.items, activeStore.id, activePage.id, addManualRow]);
 
   const formatNumberInput = (val: string | number) => {
     if (val === '' || val === undefined || val === null) return '';
@@ -527,53 +667,154 @@ export default function App() {
   };
 
   const exportStoreToExcel = (store: Store) => {
-    let csvContent = "data:text/csv;charset=utf-8,";
-    csvContent += "Cua hang,Trang,STT,So Luong,Don Gia,Thanh Tien\n";
+    const wb = XLSX.utils.book_new();
+    const wsData: any[][] = [];
     
+    let maxItems = 0;
     store.pages.forEach(page => {
-      page.items.forEach((item, idx) => {
-        if (item.quantity !== '' || item.unitPrice !== '') {
-          csvContent += `${store.name},${page.name},${idx + 1},${item.quantity},${item.unitPrice},${item.totalPrice}\n`;
+      maxItems = Math.max(maxItems, page.items.length);
+    });
+
+    // Header Row 1: Page Names
+    const headerRow1: any[] = [];
+    const headerRow2: any[] = [];
+    
+    store.pages.forEach((page, pIdx) => {
+      const startCol = pIdx * 5;
+      headerRow1[startCol] = page.name.toUpperCase();
+      headerRow2[startCol] = "STT";
+      headerRow2[startCol + 1] = "Số lượng";
+      headerRow2[startCol + 2] = "Đơn giá";
+      headerRow2[startCol + 3] = "Thành tiền";
+    });
+
+    wsData.push(headerRow1);
+    wsData.push(headerRow2);
+
+    for (let i = 0; i < maxItems; i++) {
+      const row: any[] = [];
+      store.pages.forEach((page, pIdx) => {
+        const startCol = pIdx * 5;
+        const item = page.items[i];
+        if (item) {
+          row[startCol] = i + 1;
+          row[startCol + 1] = item.quantity === '' ? null : Number(item.quantity);
+          row[startCol + 2] = item.unitPrice === '' ? null : Number(item.unitPrice);
+          row[startCol + 3] = item.totalPrice || null;
         }
       });
-      csvContent += `${store.name},${page.name},TONG TRANG,,,${getPageTotal(page)}\n`;
+      wsData.push(row);
+    }
+
+    // Totals Row
+    const totalsRow: any[] = [];
+    store.pages.forEach((page, pIdx) => {
+      const startCol = pIdx * 5;
+      totalsRow[startCol] = "TỔNG CỘNG";
+      totalsRow[startCol + 3] = getPageTotal(page);
     });
-    csvContent += `${store.name},TONG CUA HANG,,,,${getStoreTotal(store)}\n`;
+    wsData.push(totalsRow);
+
+    const ws = XLSX.utils.aoa_to_sheet(wsData);
     
-    const encodedUri = encodeURI(csvContent);
-    const link = document.createElement("a");
-    link.setAttribute("href", encodedUri);
-    link.setAttribute("download", `Bao_cao_${store.name.replace(/\s+/g, '_')}.csv`);
-    document.body.appendChild(link);
-    link.click();
-    document.body.removeChild(link);
+    // Set column widths
+    const wscols = [];
+    for (let p = 0; p < store.pages.length; p++) {
+      wscols.push({ wch: 5 });  // STT
+      wscols.push({ wch: 10 }); // Số lượng
+      wscols.push({ wch: 15 }); // Đơn giá
+      wscols.push({ wch: 20 }); // Thành tiền
+      wscols.push({ wch: 2 });  // Gap
+    }
+    ws['!cols'] = wscols;
+
+    XLSX.utils.book_append_sheet(wb, ws, store.name.substring(0, 31));
+    XLSX.writeFile(wb, `Bao_cao_${store.name.replace(/\s+/g, '_')}.xlsx`);
   };
 
   const exportAllToExcel = () => {
-    let csvContent = "data:text/csv;charset=utf-8,";
-    csvContent += "Cua hang,Trang,STT,So Luong,Don Gia,Thanh Tien\n";
+    const wb = XLSX.utils.book_new();
+    
+    // Summary Sheet
+    const summaryData: any[][] = [
+      ["BÁO CÁO TỔNG HỢP TẤT CẢ CỬA HÀNG"],
+      [],
+      ["Tên Cửa Hàng", "Tổng Cộng"]
+    ];
     
     stores.forEach(store => {
-      store.pages.forEach(page => {
-        page.items.forEach((item, idx) => {
-          if (item.quantity !== '' || item.unitPrice !== '') {
-            csvContent += `${store.name},${page.name},${idx + 1},${item.quantity},${item.unitPrice},${item.totalPrice}\n`;
-          }
-        });
-        csvContent += `${store.name},${page.name},TONG TRANG,,,${getPageTotal(page)}\n`;
-      });
-      csvContent += `${store.name},TONG CUA HANG,,,,${getStoreTotal(store)}\n\n`;
+      summaryData.push([store.name, getStoreTotal(store)]);
     });
     
-    csvContent += `TONG CONG TAT CA,,,, ,${allStoresGrandTotal}\n`;
+    summaryData.push([]);
+    summaryData.push(["TỔNG CỘNG TOÀN BỘ", allStoresGrandTotal]);
+    
+    const summaryWs = XLSX.utils.aoa_to_sheet(summaryData);
+    XLSX.utils.book_append_sheet(wb, summaryWs, "Tổng hợp");
 
-    const encodedUri = encodeURI(csvContent);
-    const link = document.createElement("a");
-    link.setAttribute("href", encodedUri);
-    link.setAttribute("download", "Bao_cao_tong_hop_tat_ca_cua_hang.csv");
-    document.body.appendChild(link);
-    link.click();
-    document.body.removeChild(link);
+    // Individual Store Sheets
+    stores.forEach(store => {
+      const wsData: any[][] = [];
+      const headerRow1: any[] = [];
+      const headerRow2: any[] = [];
+      
+      let maxItems = 0;
+      store.pages.forEach(page => {
+        maxItems = Math.max(maxItems, page.items.length);
+      });
+
+      store.pages.forEach((page, pIdx) => {
+        const startCol = pIdx * 5;
+        headerRow1[startCol] = page.name.toUpperCase();
+        headerRow2[startCol] = "STT";
+        headerRow2[startCol + 1] = "Số lượng";
+        headerRow2[startCol + 2] = "Đơn giá";
+        headerRow2[startCol + 3] = "Thành tiền";
+      });
+
+      wsData.push(headerRow1);
+      wsData.push(headerRow2);
+
+      for (let i = 0; i < maxItems; i++) {
+        const row: any[] = [];
+        store.pages.forEach((page, pIdx) => {
+          const startCol = pIdx * 5;
+          const item = page.items[i];
+          if (item) {
+            row[startCol] = i + 1;
+            row[startCol + 1] = item.quantity === '' ? null : Number(item.quantity);
+            row[startCol + 2] = item.unitPrice === '' ? null : Number(item.unitPrice);
+            row[startCol + 3] = item.totalPrice || null;
+          }
+        });
+        wsData.push(row);
+      }
+
+      const totalsRow: any[] = [];
+      store.pages.forEach((page, pIdx) => {
+        const startCol = pIdx * 5;
+        totalsRow[startCol] = "TỔNG CỘNG";
+        totalsRow[startCol + 3] = getPageTotal(page);
+      });
+      wsData.push(totalsRow);
+
+      const ws = XLSX.utils.aoa_to_sheet(wsData);
+      
+      // Set column widths
+      const wscols = [];
+      for (let p = 0; p < store.pages.length; p++) {
+        wscols.push({ wch: 5 });  // STT
+        wscols.push({ wch: 10 }); // Số lượng
+        wscols.push({ wch: 15 }); // Đơn giá
+        wscols.push({ wch: 20 }); // Thành tiền
+        wscols.push({ wch: 2 });  // Gap
+      }
+      ws['!cols'] = wscols;
+
+      XLSX.utils.book_append_sheet(wb, ws, store.name.substring(0, 31));
+    });
+
+    XLSX.writeFile(wb, "Bao_cao_tong_hop_toan_bo.xlsx");
   };
 
   const formatCurrency = (amount: number) => {
@@ -596,6 +837,71 @@ export default function App() {
           </div>
           
           <div className="flex items-center gap-2">
+            <div className="relative hidden md:block">
+              <div className={cn(
+                "flex items-center gap-2 rounded-xl border border-slate-200 bg-slate-50 px-3 py-1.5 transition-all focus-within:border-blue-500 focus-within:bg-white focus-within:ring-2 focus-within:ring-blue-100",
+                showSearch ? "w-64" : "w-10"
+              )}>
+                <Search 
+                  className="h-4 w-4 text-slate-400 cursor-pointer" 
+                  onClick={() => {
+                    setShowSearch(!showSearch);
+                    if (showSearch) setSearchTerm('');
+                  }}
+                />
+                {showSearch && (
+                  <input 
+                    type="text"
+                    placeholder="Tìm kiếm dữ liệu..."
+                    value={searchTerm}
+                    onChange={(e) => setSearchTerm(e.target.value)}
+                    autoFocus
+                    className="w-full bg-transparent text-sm outline-none"
+                  />
+                )}
+              </div>
+              
+              {/* Search Results Dropdown */}
+              <AnimatePresence>
+                {searchTerm.trim() !== '' && (
+                  <motion.div 
+                    initial={{ opacity: 0, y: 10 }}
+                    animate={{ opacity: 1, y: 0 }}
+                    exit={{ opacity: 0, y: 10 }}
+                    className="absolute right-0 top-full mt-2 w-80 max-h-96 overflow-y-auto rounded-2xl border border-slate-200 bg-white p-2 shadow-2xl z-50"
+                  >
+                    <div className="mb-2 px-3 py-1 text-[10px] font-bold uppercase tracking-widest text-slate-400">
+                      Kết quả tìm kiếm ({searchResults.length})
+                    </div>
+                    {searchResults.length > 0 ? (
+                      <div className="space-y-1">
+                        {searchResults.map((result, i) => (
+                          <button
+                            key={`${result.item.id}-${i}`}
+                            onClick={() => navigateToResult(result.storeId, result.pageId)}
+                            className="flex w-full flex-col rounded-xl p-3 text-left transition-all hover:bg-blue-50"
+                          >
+                            <div className="flex items-center justify-between mb-1">
+                              <span className="text-xs font-bold text-blue-600">{result.storeName} › {result.pageName}</span>
+                              <span className="text-[10px] font-bold text-slate-300">#{result.index + 1}</span>
+                            </div>
+                            <div className="flex items-center justify-between text-sm">
+                              <span className="text-slate-600">SL: {result.item.quantity}</span>
+                              <span className="font-bold text-slate-900">{formatCurrency(result.item.totalPrice)}</span>
+                            </div>
+                          </button>
+                        ))}
+                      </div>
+                    ) : (
+                      <div className="px-3 py-8 text-center text-sm text-slate-400">
+                        Không tìm thấy kết quả nào cho "{searchTerm}"
+                      </div>
+                    )}
+                  </motion.div>
+                )}
+              </AnimatePresence>
+            </div>
+
             <div className="hidden flex-col items-end sm:flex">
               <p className="text-[10px] font-bold uppercase tracking-widest text-slate-400">Tổng tất cả</p>
               <p className="text-lg font-black text-blue-600">{formatCurrency(allStoresGrandTotal)}</p>
@@ -642,7 +948,7 @@ export default function App() {
             <button 
               onClick={exportAllToExcel}
               className="flex h-10 w-10 items-center justify-center rounded-xl bg-green-600 text-white shadow-lg shadow-green-100 transition-all hover:bg-green-700"
-              title="Xuất tất cả cửa hàng (CSV)"
+              title="Xuất tất cả cửa hàng (Excel)"
             >
               <FileSpreadsheet className="h-5 w-5" />
             </button>
@@ -861,51 +1167,16 @@ export default function App() {
                   <div className="space-y-3">
                     <AnimatePresence initial={false}>
                       {activePage.items.map((item, index) => (
-                        <motion.div 
+                        <InventoryRow
                           key={item.id}
-                          initial={{ opacity: 0, x: -20 }}
-                          animate={{ opacity: 1, x: 0 }}
-                          exit={{ opacity: 0, scale: 0.95 }}
-                          className="group relative grid grid-cols-1 gap-4 rounded-xl border border-slate-100 bg-slate-50/50 p-4 transition-all hover:border-blue-200 hover:bg-white hover:shadow-md sm:grid-cols-12 sm:items-center"
-                        >
-                          <div className="col-span-1 font-bold text-slate-300">#{index + 1}</div>
-                          <div className="col-span-3">
-                            <label className="mb-1 block text-[10px] font-bold uppercase text-slate-400 sm:hidden">Số lượng</label>
-                            <input 
-                              type="number" 
-                              placeholder="0"
-                              value={item.quantity}
-                              onChange={(e) => updateManualItem(activeStore.id, activePage.id, item.id, 'quantity', e.target.value)}
-                              onKeyDown={(e) => handleKeyDown(e, index, 'quantity')}
-                              className="w-full rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm font-medium text-center focus:border-blue-500 focus:ring-2 focus:ring-blue-200 outline-none transition-all"
-                            />
-                          </div>
-                          <div className="col-span-3">
-                            <label className="mb-1 block text-[10px] font-bold uppercase text-slate-400 sm:hidden">Đơn giá</label>
-                            <input 
-                              type="text" 
-                              placeholder="0"
-                              value={formatNumberInput(item.unitPrice)}
-                              onChange={(e) => updateManualItem(activeStore.id, activePage.id, item.id, 'unitPrice', e.target.value)}
-                              onKeyDown={(e) => handleKeyDown(e, index, 'unitPrice')}
-                              className="w-full rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm font-medium text-right focus:border-blue-500 focus:ring-2 focus:ring-blue-200 outline-none transition-all"
-                            />
-                          </div>
-                          <div className="col-span-4 text-right">
-                            <label className="mb-1 block text-[10px] font-bold uppercase text-slate-400 sm:hidden">Thành tiền</label>
-                            <div className="px-3 py-2 text-sm font-bold text-slate-900">
-                              {formatCurrency(item.totalPrice)}
-                            </div>
-                          </div>
-                          <div className="col-span-1 flex justify-end">
-                            <button 
-                              onClick={() => removeManualRow(activeStore.id, activePage.id, item.id)}
-                              className="flex h-8 w-8 items-center justify-center rounded-lg text-slate-300 hover:bg-red-50 hover:text-red-500 transition-all"
-                            >
-                              <X className="h-4 w-4" />
-                            </button>
-                          </div>
-                        </motion.div>
+                          item={item}
+                          index={index}
+                          onUpdate={(field, value) => updateManualItem(activeStore.id, activePage.id, item.id, field, value)}
+                          onRemove={() => removeManualRow(activeStore.id, activePage.id, item.id)}
+                          onKeyDown={handleKeyDown}
+                          formatCurrency={formatCurrency}
+                          formatNumberInput={formatNumberInput}
+                        />
                       ))}
                     </AnimatePresence>
                   </div>
