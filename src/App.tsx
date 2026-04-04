@@ -73,7 +73,9 @@ const InventoryRow = React.memo(({
   onRemove, 
   onKeyDown,
   formatCurrency,
-  formatNumberInput
+  formatNumberInput,
+  isLocked,
+  onLockedClick
 }: { 
   item: InventoryItem; 
   index: number; 
@@ -82,6 +84,8 @@ const InventoryRow = React.memo(({
   onKeyDown: (e: React.KeyboardEvent, index: number, field: 'quantity' | 'unitPrice') => void;
   formatCurrency: (amount: number) => string;
   formatNumberInput: (val: string | number) => string;
+  isLocked?: boolean;
+  onLockedClick?: () => void;
 }) => {
   return (
     <motion.div 
@@ -89,7 +93,10 @@ const InventoryRow = React.memo(({
       animate={{ opacity: 1, x: 0 }}
       exit={{ opacity: 0, scale: 0.95 }}
       transition={{ duration: 0.2 }}
-      className="group relative grid grid-cols-1 gap-4 rounded-xl border border-slate-100 bg-slate-50/50 p-4 transition-all hover:border-blue-200 hover:bg-white hover:shadow-md sm:grid-cols-12 sm:items-center"
+      className={cn(
+        "group relative grid grid-cols-1 gap-4 rounded-xl border p-4 transition-all sm:grid-cols-12 sm:items-center",
+        isLocked ? "border-slate-100 bg-slate-50/30 opacity-80" : "border-slate-100 bg-slate-50/50 hover:border-blue-200 hover:bg-white hover:shadow-md"
+      )}
     >
       <div className="col-span-1 font-bold text-slate-300">#{index + 1}</div>
       <div className="col-span-3">
@@ -98,9 +105,14 @@ const InventoryRow = React.memo(({
           type="number" 
           placeholder="0"
           value={item.quantity}
+          readOnly={isLocked}
+          onClick={() => isLocked && onLockedClick?.()}
           onChange={(e) => onUpdate('quantity', e.target.value)}
           onKeyDown={(e) => onKeyDown(e, index, 'quantity')}
-          className="w-full rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm font-medium text-center focus:border-blue-500 focus:ring-2 focus:ring-blue-200 outline-none transition-all"
+          className={cn(
+            "w-full rounded-lg border px-3 py-2 text-sm font-medium text-center outline-none transition-all",
+            isLocked ? "border-transparent bg-transparent text-slate-500 cursor-not-allowed" : "border-slate-200 bg-white focus:border-blue-500 focus:ring-2 focus:ring-blue-200"
+          )}
         />
       </div>
       <div className="col-span-3">
@@ -109,9 +121,14 @@ const InventoryRow = React.memo(({
           type="text" 
           placeholder="0"
           value={formatNumberInput(item.unitPrice)}
+          readOnly={isLocked}
+          onClick={() => isLocked && onLockedClick?.()}
           onChange={(e) => onUpdate('unitPrice', e.target.value)}
           onKeyDown={(e) => onKeyDown(e, index, 'unitPrice')}
-          className="w-full rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm font-medium text-right focus:border-blue-500 focus:ring-2 focus:ring-blue-200 outline-none transition-all"
+          className={cn(
+            "w-full rounded-lg border px-3 py-2 text-sm font-medium text-right outline-none transition-all",
+            isLocked ? "border-transparent bg-transparent text-slate-500 cursor-not-allowed" : "border-slate-200 bg-white focus:border-blue-500 focus:ring-2 focus:ring-blue-200"
+          )}
         />
       </div>
       <div className="col-span-4 text-right">
@@ -122,8 +139,11 @@ const InventoryRow = React.memo(({
       </div>
       <div className="col-span-1 flex justify-end">
         <button 
-          onClick={onRemove}
-          className="flex h-8 w-8 items-center justify-center rounded-lg text-slate-300 hover:bg-red-50 hover:text-red-500 transition-all"
+          onClick={() => isLocked ? onLockedClick?.() : onRemove()}
+          className={cn(
+            "flex h-8 w-8 items-center justify-center rounded-lg transition-all",
+            isLocked ? "text-slate-200 cursor-not-allowed" : "text-slate-300 hover:bg-red-50 hover:text-red-500"
+          )}
         >
           <X className="h-4 w-4" />
         </button>
@@ -246,7 +266,9 @@ export default function App() {
     title: string;
     message: string;
     onConfirm: () => void;
-    type: 'danger' | 'warning';
+    type: 'danger' | 'warning' | 'info';
+    hideCancel?: boolean;
+    confirmText?: string;
   }>({
     show: false,
     title: '',
@@ -254,6 +276,18 @@ export default function App() {
     onConfirm: () => {},
     type: 'warning'
   });
+
+  const handleLockedAction = useCallback(() => {
+    setConfirmModal({
+      show: true,
+      title: 'Cửa hàng đang bị khóa',
+      message: 'Dữ liệu của cửa hàng này đang được khóa để tránh chỉnh sửa nhầm. Vui lòng mở khóa (biểu tượng ổ khóa màu cam ở tên cửa hàng) để tiếp tục chỉnh sửa.',
+      type: 'warning',
+      hideCancel: true,
+      confirmText: 'Đã hiểu',
+      onConfirm: () => setConfirmModal(prev => ({ ...prev, show: false }))
+    });
+  }, []);
 
   // Renaming State
   const [editingStoreId, setEditingStoreId] = useState<string | null>(null);
@@ -629,6 +663,11 @@ export default function App() {
   }, []);
 
   const handleKeyDown = useCallback((e: React.KeyboardEvent, index: number, field: 'quantity' | 'unitPrice') => {
+    if (activeStore.isLocked) {
+      e.preventDefault();
+      handleLockedAction();
+      return;
+    }
     if (e.key === 'Enter') {
       e.preventDefault();
       const items = activePage.items;
@@ -1195,7 +1234,10 @@ export default function App() {
                       ) : (
                         <button 
                           onClick={() => setActivePageId(p.id)}
-                          onDoubleClick={() => { setEditingPageId(p.id); setEditValue(p.name); }}
+                          onDoubleClick={() => { 
+                            if (activeStore.isLocked) handleLockedAction();
+                            else { setEditingPageId(p.id); setEditValue(p.name); }
+                          }}
                           className={cn(
                             "flex items-center gap-2 rounded-xl px-4 py-2.5 text-sm font-bold transition-all",
                             activePage.id === p.id ? "bg-blue-600 text-white shadow-lg shadow-blue-100" : "bg-white text-slate-500 hover:bg-slate-100"
@@ -1209,14 +1251,22 @@ export default function App() {
                       {activeStore.pages.length > 1 && editingPageId !== p.id && (
                         <div className="absolute -right-1 -top-1 hidden gap-1 group-hover:flex">
                           <button 
-                            onClick={(e) => { e.stopPropagation(); setEditingPageId(p.id); setEditValue(p.name); }}
-                            className="flex h-5 w-5 items-center justify-center rounded-full bg-blue-500 text-white shadow-sm"
+                            onClick={(e) => { 
+                              e.stopPropagation(); 
+                              if (activeStore.isLocked) handleLockedAction();
+                              else { setEditingPageId(p.id); setEditValue(p.name); }
+                            }}
+                            className="flex h-5 w-5 items-center justify-center rounded-full bg-blue-500 text-white shadow-sm hover:bg-blue-600"
                           >
                             <Edit2 className="h-3 w-3" />
                           </button>
                           <button 
-                            onClick={(e) => { e.stopPropagation(); removePage(activeStore.id, p.id); }}
-                            className="flex h-5 w-5 items-center justify-center rounded-full bg-red-500 text-white shadow-sm"
+                            onClick={(e) => { 
+                              e.stopPropagation(); 
+                              if (activeStore.isLocked) handleLockedAction();
+                              else removePage(activeStore.id, p.id); 
+                            }}
+                            className="flex h-5 w-5 items-center justify-center rounded-full bg-red-500 text-white shadow-sm hover:bg-red-600"
                           >
                             <X className="h-3 w-3" />
                           </button>
@@ -1225,7 +1275,7 @@ export default function App() {
                     </div>
                   ))}
                   <button 
-                    onClick={() => addPage(activeStoreId)}
+                    onClick={() => activeStore.isLocked ? handleLockedAction() : addPage(activeStoreId)}
                     className="flex h-10 w-10 items-center justify-center rounded-xl bg-white text-blue-600 shadow-sm transition-all hover:bg-blue-50"
                     title="Thêm trang mới"
                   >
@@ -1286,13 +1336,15 @@ export default function App() {
                           onKeyDown={handleKeyDown}
                           formatCurrency={formatCurrency}
                           formatNumberInput={formatNumberInput}
+                          isLocked={!!activeStore.isLocked}
+                          onLockedClick={handleLockedAction}
                         />
                       ))}
                     </AnimatePresence>
                   </div>
 
                   <button 
-                    onClick={() => addManualRow(activeStore.id, activePage.id)}
+                    onClick={() => activeStore.isLocked ? handleLockedAction() : addManualRow(activeStore.id, activePage.id)}
                     className="flex w-full items-center justify-center gap-2 rounded-xl border-2 border-dashed border-slate-200 py-4 text-sm font-bold text-slate-400 transition-all hover:border-blue-400 hover:bg-blue-50 hover:text-blue-600"
                   >
                     <PlusCircle className="h-5 w-5" />
@@ -1416,12 +1468,14 @@ export default function App() {
               <h3 className="mb-2 text-2xl font-bold text-slate-900">{confirmModal.title}</h3>
               <p className="mb-8 text-slate-500 leading-relaxed">{confirmModal.message}</p>
               <div className="flex gap-3">
-                <button 
-                  onClick={() => setConfirmModal(prev => ({ ...prev, show: false }))}
-                  className="flex-1 rounded-2xl bg-slate-100 py-4 font-bold text-slate-600 transition-all hover:bg-slate-200"
-                >
-                  Hủy bỏ
-                </button>
+                {!confirmModal.hideCancel && (
+                  <button 
+                    onClick={() => setConfirmModal(prev => ({ ...prev, show: false }))}
+                    className="flex-1 rounded-2xl bg-slate-100 py-4 font-bold text-slate-600 transition-all hover:bg-slate-200"
+                  >
+                    Hủy bỏ
+                  </button>
+                )}
                 <button 
                   onClick={confirmModal.onConfirm}
                   className={cn(
@@ -1429,7 +1483,7 @@ export default function App() {
                     confirmModal.type === 'danger' ? "bg-red-500 shadow-red-100 hover:bg-red-600" : "bg-blue-600 shadow-blue-100 hover:bg-blue-700"
                   )}
                 >
-                  Xác nhận
+                  {confirmModal.confirmText || 'Xác nhận'}
                 </button>
               </div>
             </motion.div>
